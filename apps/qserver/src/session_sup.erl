@@ -1,11 +1,13 @@
-%% main supervisor of the qserver application
+%% session supervisor
 %%
--module(qserver_sup).
+%% supervises all open sessions, a new child gets created for each connection (session)
+%%
+-module(session_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, start_child/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -25,9 +27,9 @@ start_link() ->
 %% ===================================================================
 
 init([])->
-    SessionMngr = ?CHILD(session_mngr, worker),
-    SessionSup  = ?CHILD(session_sup, supervisor),
-    QueueSup    = ?CHILD(queue_sup, supervisor),
+    SessionWorker = ?CHILD(session_worker, worker),
 
-    {ok, { {one_for_one, 5, 10}, [SessionMngr, SessionSup, QueueSup] } }.
+    {ok, { {simple_one_for_one, 5, 10}, [SessionWorker] } }.
 
+start_child(SessionPid)->
+    supervisor:start_child(?MODULE, [SessionPid]).

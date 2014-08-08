@@ -1,11 +1,13 @@
-%% main supervisor of the qserver application
+%% queue supervisor
 %%
--module(qserver_sup).
+%% supervises the queue processes
+%%
+-module(queue_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, start_child/0]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -25,9 +27,9 @@ start_link() ->
 %% ===================================================================
 
 init([])->
-    SessionMngr = ?CHILD(session_mngr, worker),
-    SessionSup  = ?CHILD(session_sup, supervisor),
-    QueueSup    = ?CHILD(queue_sup, supervisor),
+    QueueWorker = ?CHILD(queue_worker, worker),
 
-    {ok, { {one_for_one, 5, 10}, [SessionMngr, SessionSup, QueueSup] } }.
+    {ok, { {simple_one_for_one, 5, 10}, [QueueWorker] } }.
 
+start_child()->
+    supervisor:start_child(?MODULE, []).

@@ -1,4 +1,4 @@
 #! /bin/bash
 
-erl -pa apps/*/ebin -boot start_sasl -s qserver
+erl -pa apps/*/ebin -s qs
 
