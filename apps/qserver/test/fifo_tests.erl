@@ -2,10 +2,10 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-create()->
+create_test()->
     ?assertMatch({fifo, _, []}, fifo:new()).
 
-operations()->
+operations_test()->
     List = [a,b,c,d,e],
     %% push all elements into queue
     Qfull = lists:foldl( fun fifo:in/2, fifo:new(), List ),
@@ -21,4 +21,5 @@ operations()->
             lists:seq(1, length(List)) ),
         
     ?assertEqual(List, ElementsOut),
+    ?assertEqual(0, fifo:len(Qempty)),
     ?assertEqual(empty, fifo:out(Qempty)).

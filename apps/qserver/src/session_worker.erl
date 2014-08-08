@@ -13,7 +13,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1]).
+-export([start_link/1, reset/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -40,6 +40,9 @@
 %%--------------------------------------------------------------------
 start_link(Qworker) ->
     gen_server:start_link(?MODULE, [Qworker], []).
+
+reset(Qworker) ->
+    gen_server:call(Qworker, reset).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -73,6 +76,11 @@ init([Qworker]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+
+handle_call(reset, _From, State) ->
+    ?log("(~p) resetting", [self()]),
+    Reply = ok,
+    {reply, Reply, State#state{qworker = undefined}};
 
 handle_call(Request, _From, State) ->
     ?log("Unknown request: ~p", [Request]),
@@ -110,7 +118,7 @@ handle_info({tcp, _Port, Data}, State = #state{qworker = Qworker}) ->
             ["out" | _ ]    -> queue_worker:out(Qworker);
             ["len" | _ ]    -> queue_worker:len(Qworker);
             []              -> "";
-            _               -> unknown_cmd
+            _               -> unknown_command
         end,
     gen_tcp:send(_Port, io_lib:format("~p\r\n", [Result]) ), 
     {noreply, State};

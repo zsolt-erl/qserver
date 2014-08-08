@@ -56,9 +56,9 @@ get_state() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    {ok, ListenSocket} = gen_tcp:listen(?PORT, [{ip, {0,0,0,0}}, list, {packet, line}]),
+    {ok, ListenSocket} = gen_tcp:listen(?conf(bind_port), [{ip, ?conf(bind_ip)}, list, {packet, line}]),
     Self = self(),
-    ?log("Listening on: ~p", [?PORT]),
+    ?log("Listening on: ~p", [?conf(bind_port)]),
     Acceptor = spawn(fun()->acceptor(ListenSocket, Self) end),
     erlang:monitor(process, Acceptor),
     {ok, #state{listensocket = ListenSocket, acceptor = Acceptor}}.
@@ -115,57 +115,38 @@ handle_info({'DOWN', _Ref, process, Acceptor, _Reason}, State = #state{acceptor 
     NewState = State#state{acceptor = NewAcceptor},
     {noreply, NewState};
 
-handle_info({new_connection, Socket}, State = #state{session_workers = Sworkers, queue_workers = Qworkers, active_sessions = ActiveSessions}) ->
-    %% get a session worker
-    %% get a queue worker
-    %% pass Socket to session worker
-    %% create active ssn record (PIDs of workers and socket)
-
+handle_info({new_connection, Socket}, State) ->
     ?log("got new connection"),
-    QworkerCount = length(Qworkers) + length(ActiveSessions),
-    {NewQworker, NewQueueWorkers} = case Qworkers of
-        %% grab an idle worker
-        [Hq|Tq] -> {Hq, Tq};
-        
-        %% no idle workers, create a new one
-        [] when QworkerCount < 5 ->
-            {ok, QW} = queue_sup:start_child(),
-            erlang:monitor(process, QW),
-            {QW, []};
 
-        %% can't assign worker
-        _ -> throw(no_more_queues)
-    end,
+    try
+        NewState = set_up_session(Socket, State),
+        gen_tcp:send(Socket, "connected to qserver\r\n" ), 
+        {noreply, NewState}
+    catch
+        throw:Term ->
+            ?log("closing connection: ~p", [Term]),
+            gen_tcp:send(Socket, io_lib:format("~p\r\n", [Term]) ), 
+            gen_tcp:close(Socket),
+            {noreply, State}
+    end;
 
-    SworkerCount = length(Sworkers) + length(ActiveSessions),
-    {NewSworker, NewSessionWorkers} = case Sworkers of
-        %% grab an idle worker
-        [Hs|Ts] -> {Hs, Ts};
-        
-        %% no idle workers, create a new one
-        [] when SworkerCount < 5 ->
-            {ok, SW} = session_sup:start_child(NewQworker),
-            erlang:monitor(process, SW),
-            {SW, []};
-
-        %% can't assign worker
-        _ -> throw(no_more_sessions)
-    end,
-
-
-    NewActiveSessions = [{NewSworker, NewQworker, Socket} | ActiveSessions],
-
-    %% give the socket to the new session worker
-    gen_tcp:controlling_process(Socket, NewSworker),
-
-    NewState = State#state{session_workers = NewSessionWorkers, queue_workers = NewQueueWorkers, active_sessions = NewActiveSessions},
-    {noreply, NewState};
-
-handle_info({session_worker, Pid, tcp_closed}, State = #state{session_workers = Sworkers, queue_workers = Qworkers, active_sessions = ActiveSessions}) ->
+handle_info({session_worker, SWpid, tcp_closed}, State = #state{session_workers = Sworkers, queue_workers = Qworkers, active_sessions = ActiveSessions}) ->
     %% remove session worker and queue worker from active sessions
     %% reset queue
     %% add worker PIDs to the pools in State
-    {noreply, State};
+    {NewSworkers, NewQworkers, NewActiveSessions} = 
+        case lists:keytake(SWpid, 1, ActiveSessions) of
+            false ->
+                ?log("session worker ~p (inactive) lost connection", [SWpid]),
+                {Sworkers, Qworkers, ActiveSessions};
+            {value, {SWpid, QWpid, _Socket}, RemainingSessions} ->
+                ?log("session worker ~p lost connection", [SWpid]),
+                queue_worker:reset(QWpid),
+                session_worker:reset(SWpid),
+                {[SWpid|Sworkers], [QWpid|Qworkers], RemainingSessions}
+        end,
+    NewState = State#state{session_workers = NewSworkers, queue_workers = NewQworkers, active_sessions = NewActiveSessions},
+    {noreply, NewState};
 
 handle_info(Info, State) ->
     ?log("received: ~p", [Info]),
@@ -215,3 +196,56 @@ acceptor(ListenSocket, SocketMngrPid) ->
     acceptor(ListenSocket, SocketMngrPid).
 
 
+%% set up a new session
+%% 
+%% there's a 1 to 1 relation between sessions (connections) and queues
+%%
+-spec set_up_session(Socket :: port(), State :: #state{}) -> NewState :: #state{} .
+set_up_session(Socket, State = #state{session_workers = Sworkers, queue_workers = Qworkers, active_sessions = ActiveSessions}) ->
+    %% get a queue worker (create one if there's no idle, throw exception if limit is reached)
+    %% get a session worker (create one if there's no idle, throw exception if limit is reached)
+    %% give TCP socket to the session worker
+    %% update state
+
+    %% get a queue worker
+    QworkerCount = length(Qworkers) + length(ActiveSessions),
+    {NewQworker, NewQueueWorkers} = case Qworkers of
+        %% grab an idle worker
+        [Hq|Tq] -> {Hq, Tq};
+        
+        %% no idle workers
+        [] -> case QworkerCount < ?conf(max_queues) of 
+                %% create a new one
+                true -> 
+                    {ok, QW} = queue_sup:start_child(),
+                    erlang:monitor(process, QW),
+                    {QW, []};
+                %% can't create more -> throw in the towel
+                false ->
+                    throw(no_available_queues)
+            end
+    end,
+
+    %% get a session worker
+    SworkerCount = length(Sworkers) + length(ActiveSessions),
+    {NewSworker, NewSessionWorkers} = case Sworkers of
+        %% grab an idle worker
+        [Hs|Ts] -> {Hs, Ts};
+        
+        %% no idle workers
+        [] -> case SworkerCount < ?conf(max_sessions) of
+                true ->
+                    {ok, SW} = session_sup:start_child(NewQworker),
+                    erlang:monitor(process, SW),
+                    {SW, []};
+                false ->
+                    throw(no_available_sessions)
+            end
+    end,
+
+    NewActiveSessions = [{NewSworker, NewQworker, Socket} | ActiveSessions],
+
+    %% give the socket to the new session worker
+    gen_tcp:controlling_process(Socket, NewSworker),
+
+    State#state{session_workers = NewSessionWorkers, queue_workers = NewQueueWorkers, active_sessions = NewActiveSessions}.

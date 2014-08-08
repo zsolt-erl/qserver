@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, new/1, in/2, out/1, len/1]).
+-export([start_link/0, reset/1, in/2, out/1, len/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -33,8 +33,8 @@
 start_link() ->
     gen_server:start_link(?MODULE, [], []).
 
-new(WorkerPid)->
-    gen_server:call(WorkerPid, new).
+reset(WorkerPid)->
+    gen_server:call(WorkerPid, reset).
 
 in(WorkerPid, Element) ->
     gen_server:call(WorkerPid, {in, Element}).
@@ -77,7 +77,8 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call(new, _From, State) ->
+handle_call(reset, _From, State) ->
+    ?log("(~p) resetting", [self()]),
     Reply = ok,
     NewState = State#state{fifo = fifo:new()},
     {reply, Reply, NewState};
