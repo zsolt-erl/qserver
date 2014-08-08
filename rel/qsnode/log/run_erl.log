@@ -1,0 +1,8 @@
+run_erl [22802] Fri Aug  8 07:36:15 2014
+Args before exec of shell:
+run_erl [22802] Fri Aug  8 07:36:15 2014
+argv[0] = sh
+run_erl [22802] Fri Aug  8 07:36:15 2014
+argv[1] = -c
+run_erl [22802] Fri Aug  8 07:36:15 2014
+argv[2] = exec /home/ubuntu/dev/qserver/rel/qsnode/bin/qsnode console \'\' 
