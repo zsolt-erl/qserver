@@ -1,11 +1,19 @@
--module(session_mngr).
+%% session worker process
+%%
+%% this handles the communication over an open TCP connection
+%%
+%% it implements the protocol that the qserver application uses to communicate over the socket connection
+%%
+
+
+-module(session_worker).
 
 -include("qserver.hrl").
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -16,11 +24,7 @@
          code_change/3]).
 
 -record(state, {
-        listensocket,
-        acceptor,
-        queue_workers = []   :: [pid()],
-        session_workers = [] :: [pid()],
-        active_sessions = [] :: {Qworker :: pid(), Sworker::pid(), Socket::pid()}
+        qworker  :: pid()
 }).
 
 %%%===================================================================
@@ -34,8 +38,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+start_link(Qworker) ->
+    gen_server:start_link(?MODULE, [Qworker], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -52,13 +56,8 @@ start_link() ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([]) ->
-    {ok, ListenSocket} = gen_tcp:listen(?PORT, [{ip, {0,0,0,0}}, list, {packet, line}]),
-    Self = self(),
-    ?log("Listening on: ~p", [?PORT]),
-    Acceptor = spawn(fun()->acceptor(ListenSocket, Self) end),
-    erlang:monitor(process, Acceptor),
-    {ok, #state{listensocket = ListenSocket, acceptor = Acceptor}}.
+init([Qworker]) ->
+    {ok, #state{qworker = Qworker}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -74,7 +73,9 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call(_Request, _From, State) ->
+
+handle_call(Request, _From, State) ->
+    ?log("Unknown request: ~p", [Request]),
     Reply = ok,
     {reply, Reply, State}.
 
@@ -101,61 +102,21 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({'DOWN', _Ref, process, Acceptor, _Reason}, State = #state{acceptor = Acceptor}) ->
-    ?log("Acceptor process went down, respawning it"),
-    NewAcceptor = spawn(?MODULE, acceptor, [self()]),
-    erlang:monitor(process, NewAcceptor),
-    NewState = State#state{acceptor = NewAcceptor},
-    {noreply, NewState};
-
-handle_info({new_connection, Socket}, State = #state{session_workers = Sworkers, queue_workers = Qworkers, active_sessions = ActiveSessions}) ->
-    %% get a session worker
-    %% get a queue worker
-    %% pass Socket to session worker
-    %% create active ssn record (PIDs of workers and socket)
-
-    ?log("got new connection"),
-    QworkerCount = length(Qworkers) + length(ActiveSessions),
-    {NewQworker, NewQueueWorkers} = case Qworkers of
-        %% grab an idle worker
-        [Hq|Tq] -> {Hq, Tq};
-        
-        %% no idle workers, create a new one
-        [] when QworkerCount < 5 ->
-            {ok, QW} = queue_sup:start_child(),
-            erlang:monitor(process, QW),
-            {QW, []};
-
-        %% can't assign worker
-        _ -> throw(no_more_queues)
-    end,
-
-    SworkerCount = length(Sworkers) + length(ActiveSessions),
-    {NewSworker, NewSessionWorkers} = case Sworkers of
-        %% grab an idle worker
-        [Hs|Ts] -> {Hs, Ts};
-        
-        %% no idle workers, create a new one
-        [] when SworkerCount < 5 ->
-            {ok, SW} = session_sup:start_child(NewQworker),
-            erlang:monitor(process, SW),
-            {SW, []};
-
-        %% can't assign worker
-        _ -> throw(no_more_sessions)
-    end,
+handle_info({tcp, _Port, Data}, State = #state{qworker = Qworker}) ->
+    ?log("(~p) received: ~p", [self(), Data]),
+    Result = 
+        case string:tokens(Data, " \r\n") of
+            ["in", Arg | _] -> queue_worker:in(Qworker, Arg);
+            ["out" | _ ]    -> queue_worker:out(Qworker);
+            ["len" | _ ]    -> queue_worker:len(Qworker);
+            []              -> "";
+            _               -> unknown_cmd
+        end,
+    gen_tcp:send(_Port, io_lib:format("~p\r\n", [Result]) ), 
+    {noreply, State};
 
 
-    NewActiveSessions = [{NewSworker, NewQworker, Socket} | ActiveSessions],
-
-    %% give the socket to the new session worker
-    gen_tcp:controlling_process(Socket, NewSworker),
-
-    NewState = State#state{session_workers = NewSessionWorkers, queue_workers = NewQueueWorkers, active_sessions = NewActiveSessions},
-    {noreply, NewState};
-
-handle_info(Info, State) ->
-    ?log("received: ~p", [Info]),
+handle_info(_Info, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -186,19 +147,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-%%%
-
-%% accept connections and pass them over to session manager
-acceptor(ListenSocket, SocketMngrPid) -> 
-    ?log("Acceptor ~p is waiting for connection, ~p", [self(), SocketMngrPid]),
-    case gen_tcp:accept(ListenSocket) of
-        {ok, Socket} -> 
-            ?log("Accepted connection"),
-            ?MODULE ! {new_connection, Socket},
-            ok = gen_tcp:controlling_process(Socket, SocketMngrPid);
-        {error, Reason} ->
-            ?log("ERROR: could not accept connection: ~p", [Reason])
-    end,
-    acceptor(ListenSocket, SocketMngrPid).
-
-

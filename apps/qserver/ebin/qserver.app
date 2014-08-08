@@ -6,4 +6,5 @@
               {mod,{qserver_app,[]}},
               {env,[]},
               {modules,[fifo,fifo_tests,qs,qserver_app,qserver_sup,queue_sup,
-                        queue_worker,session_mngr,session_sup]}]}.
+                        queue_worker,session_mngr,session_sup,
+                        session_worker]}]}.

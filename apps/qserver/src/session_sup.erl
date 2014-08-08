@@ -31,5 +31,5 @@ init([])->
 
     {ok, { {simple_one_for_one, 5, 10}, [SessionWorker] } }.
 
-start_child(SessionPid)->
-    supervisor:start_child(?MODULE, [SessionPid]).
+start_child(Qworker)->
+    supervisor:start_child(?MODULE, [Qworker]).
