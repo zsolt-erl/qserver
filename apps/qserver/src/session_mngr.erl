@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, get_state/0]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -36,6 +36,9 @@
 %%--------------------------------------------------------------------
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+get_state() ->
+    gen_server:call(?MODULE, get_state).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -74,6 +77,10 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call(get_state, _From, State) ->
+    Reply = State,
+    {reply, Reply, State};
+
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -153,6 +160,12 @@ handle_info({new_connection, Socket}, State = #state{session_workers = Sworkers,
 
     NewState = State#state{session_workers = NewSessionWorkers, queue_workers = NewQueueWorkers, active_sessions = NewActiveSessions},
     {noreply, NewState};
+
+handle_info({session_worker, Pid, tcp_closed}, State = #state{session_workers = Sworkers, queue_workers = Qworkers, active_sessions = ActiveSessions}) ->
+    %% remove session worker and queue worker from active sessions
+    %% reset queue
+    %% add worker PIDs to the pools in State
+    {noreply, State};
 
 handle_info(Info, State) ->
     ?log("received: ~p", [Info]),

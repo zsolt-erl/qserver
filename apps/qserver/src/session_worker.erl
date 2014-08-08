@@ -115,8 +115,13 @@ handle_info({tcp, _Port, Data}, State = #state{qworker = Qworker}) ->
     gen_tcp:send(_Port, io_lib:format("~p\r\n", [Result]) ), 
     {noreply, State};
 
+handle_info({tcp_closed, _Port}, State) ->
+    ?log("(~p) received: tcp_closed", [self()]),
+    session_mngr ! {session_worker, self(), tcp_closed},
+            {noreply, State#state{qworker = undefined}};
 
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    ?log("(~p) received: ~p", [self(), Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
