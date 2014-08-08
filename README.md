@@ -29,16 +29,15 @@ You can change the IP address and port the server binds to (default is 0.0.0.0 :
 
 You can also change the maximum number of queue workers and session workers. 
 
-Since in this version each session has it's own queue the above numbers (max_sessions, max_queues) should be the same.
+Since in this version each session has its own queue and each queue is managed by only one session therefore the above numbers (max_sessions, max_queues) should be the same. Later versions can implement one-to-many and/or many-to-many relations between sessions and queues.
 
 Protocol
 --------
-Command         | Description
-:---------------|:---------------
-in Argument :   | put the Argument into the queue |
-out         :   | take the oldest element out of the queue |
-len         :   | get the queue length
-                | 
+Command        | Description
+:--------------|:---------------
+in Argument    | put the Argument into the queue |
+out            | take the oldest element out of the queue |
+len            | get the queue length
     
 **out** on an empty queue will return **empty** as an answer
 

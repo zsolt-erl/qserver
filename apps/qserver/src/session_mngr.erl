@@ -230,6 +230,7 @@ set_up_session(Socket, State = #state{session_workers = Sworkers, queue_workers 
     SworkerCount = length(Sworkers) + length(ActiveSessions),
     {NewSworker, NewSessionWorkers} = case Sworkers of
         %% grab an idle worker
+        %% TODO: call session worker and set it's state with NewQworker
         [Hs|Ts] -> {Hs, Ts};
         
         %% no idle workers
