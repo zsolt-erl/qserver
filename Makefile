@@ -7,6 +7,7 @@ clean:
 	./rebar clean
 
 release:
+	rm -rf ./rel/qsnode
 	./rebar generate
 
 test:
