@@ -132,7 +132,7 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({tcp, _Port, Data}, State = #state{qworker = Qworker}) ->
+handle_info({tcp, Port, Data}, State = #state{qworker = Qworker}) ->
     ?log("(~p) received: ~p", [self(), Data]),
     Result = 
         case string:tokens(Data, " \r\n") of
@@ -142,7 +142,11 @@ handle_info({tcp, _Port, Data}, State = #state{qworker = Qworker}) ->
             []              -> "";
             _               -> unknown_command
         end,
-    gen_tcp:send(_Port, lists:flatten(io_lib:format("~p\r\n", [Result])) ), 
+    Output = case io_lib:printable_list(Result) of
+        true  -> Result ++ "\r\n";
+        false -> io_lib:format("~p\r\n", [Result])
+    end,
+    gen_tcp:send(Port, Output), 
     {noreply, State};
 
 handle_info({tcp_closed, _Port}, State) ->
