@@ -7,7 +7,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start_child/1]).
+-export([start_link/0, start_child/0]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -31,5 +31,5 @@ init([])->
 
     {ok, { {simple_one_for_one, 5, 10}, [SessionWorker] } }.
 
-start_child(Qworker)->
-    supervisor:start_child(?MODULE, [Qworker]).
+start_child()->
+    supervisor:start_child(?MODULE, []).

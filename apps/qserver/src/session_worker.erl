@@ -13,7 +13,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, reset/1]).
+-export([start_link/0, reset/1, set_queue/2, set_socket/2]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -24,6 +24,7 @@
          code_change/3]).
 
 -record(state, {
+        socket   :: port(),
         qworker  :: pid()
 }).
 
@@ -38,11 +39,19 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Qworker) ->
-    gen_server:start_link(?MODULE, [Qworker], []).
+start_link() ->
+    gen_server:start_link(?MODULE, [], []).
 
-reset(Qworker) ->
-    gen_server:call(Qworker, reset).
+%% reset the session worker, remove connection to any queue worker process
+reset(Sworker) ->
+    gen_server:call(Sworker, reset).
+
+%% set up session worker to manage the Qworker queue
+set_queue(Sworker, Qworker) ->
+    gen_server:call(Sworker, {set_queue, Qworker}).
+
+set_socket(Sworker, Socket) ->
+    gen_server:call(Sworker, {set_socket, Socket}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -59,8 +68,10 @@ reset(Qworker) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Qworker]) ->
-    {ok, #state{qworker = Qworker}}.
+init([]) ->
+    ?log("(~p) initialized", [self()]),
+    session_mngr ! {self(), session_worker_ready},
+    {ok, #state{}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -79,8 +90,19 @@ init([Qworker]) ->
 
 handle_call(reset, _From, State) ->
     ?log("(~p) resetting", [self()]),
+    gen_tcp:close(State#state.socket),
     Reply = ok,
-    {reply, Reply, State#state{qworker = undefined}};
+    {reply, Reply, State#state{qworker = undefined, socket = undefined}};
+
+handle_call({set_queue, Qworker}, _From, State) ->
+    ?log("(~p) setting queue worker to ~p", [self(), Qworker]),
+    Reply = ok,
+    {reply, Reply, State#state{qworker = Qworker}};
+
+handle_call({set_socket, Socket}, _From, State) ->
+    ?log("(~p) setting socket to ~p", [self(), Socket]),
+    Reply = ok,
+    {reply, Reply, State#state{socket = Socket}};
 
 handle_call(Request, _From, State) ->
     ?log("Unknown request: ~p", [Request]),
@@ -120,13 +142,13 @@ handle_info({tcp, _Port, Data}, State = #state{qworker = Qworker}) ->
             []              -> "";
             _               -> unknown_command
         end,
-    gen_tcp:send(_Port, io_lib:format("~p\r\n", [Result]) ), 
+    gen_tcp:send(_Port, lists:flatten(io_lib:format("~p\r\n", [Result])) ), 
     {noreply, State};
 
 handle_info({tcp_closed, _Port}, State) ->
     ?log("(~p) received: tcp_closed", [self()]),
     session_mngr ! {session_worker, self(), tcp_closed},
-            {noreply, State#state{qworker = undefined}};
+    {noreply, State#state{qworker = undefined}};
 
 handle_info(Info, State) ->
     ?log("(~p) received: ~p", [self(), Info]),

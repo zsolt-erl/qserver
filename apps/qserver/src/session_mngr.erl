@@ -15,12 +15,18 @@
          terminate/2,
          code_change/3]).
 
+-record(session, {
+        qworker :: pid(),
+        sworker :: pid(),
+        socket  :: port()
+}).
+
 -record(state, {
         listensocket,
         acceptor,
         queue_workers = []   :: [pid()],
         session_workers = [] :: [pid()],
-        active_sessions = [] :: {Qworker :: pid(), Sworker::pid(), Socket::pid()}
+        active_sessions = [] :: [#session{}]
 }).
 
 %%%===================================================================
@@ -108,11 +114,75 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+
+%% session worker started
+handle_info({Pid, session_worker_ready}, State = #state{session_workers = Sworkers, active_sessions = ActiveSessions}) ->
+    monitor(process, Pid),
+    NewState = 
+        case lists:keyfind(Pid, #session.sworker, ActiveSessions) of
+            false ->
+                %% not in active session, add to list of session workers
+                State#state{session_workers = [Pid|Sworkers]};
+            _ -> 
+                State
+        end,
+    {noreply, NewState};
+
+%% queue worker started
+handle_info({Pid, queue_worker_ready}, State = #state{queue_workers = Qworkers, active_sessions = ActiveSessions}) ->
+    monitor(process, Pid),
+    NewState = 
+        case lists:keyfind(Pid, #session.qworker, ActiveSessions) of
+            false ->
+                %% not in active session, add to list of session workers
+                State#state{queue_workers = [Pid|Qworkers]};
+            _ -> 
+                State
+        end,
+    {noreply, NewState};
+
+%% connection acceptor process died
 handle_info({'DOWN', _Ref, process, Acceptor, _Reason}, State = #state{acceptor = Acceptor}) ->
     ?log("Acceptor process went down, respawning it"),
     NewAcceptor = spawn(?MODULE, acceptor, [self()]),
     erlang:monitor(process, NewAcceptor),
     NewState = State#state{acceptor = NewAcceptor},
+    {noreply, NewState};
+
+%% some other process died (session worker or queue worker)
+handle_info({'DOWN', _Ref, process, Pid, Reason}, State = #state{session_workers = Sworkers, queue_workers = Qworkers, active_sessions = ActiveSessions}) ->
+    %% TODO: ugly cascading case; figure out how to refactor it!
+    %% check if it was an idle session worker
+    NewState = case lists:member(Pid, Sworkers) of
+        true  -> State#state{session_workers = Sworkers -- [Pid]};
+        false -> 
+            %% idle queue worker?
+            case lists:member(Pid, Qworkers) of
+                true  -> State#state{queue_workers = Qworkers -- [Pid]};
+                false -> 
+                    %% active session worker?
+                    case lists:keytake(Pid, #session.sworker, ActiveSessions) of 
+                        {value, Session, NewActiveSessions} ->
+                            %% reset the queue and return it to idle pool since the session worker crashed
+                            queue_worker:reset(Session#session.qworker),
+                            NewQworkers = [Session#session.qworker | Qworkers],
+                            State#state{queue_workers = NewQworkers, active_sessions = NewActiveSessions};
+                        false -> 
+                            %% active queue worker?
+                            case lists:keytake(Pid, #session.qworker, ActiveSessions) of 
+                                {value, Session, NewActiveSessions} ->
+                                    %% reset the session worker and return it to idle pool since the queue worker crashed
+                                    session_worker:reset(Session#session.sworker),
+                                    NewSworkers = [Session#session.sworker | Sworkers],
+                                    State#state{session_workers = NewSworkers, active_sessions = NewActiveSessions};
+                                false ->
+                                    %% no idea who this was, don't do anything just log it
+                                    ?log("some unknown process (~p) crashed with reason: ~p", [Pid, Reason]),
+                                    State
+                            end
+                    end
+            end
+    end,
     {noreply, NewState};
 
 handle_info({new_connection, Socket}, State) ->
@@ -135,11 +205,11 @@ handle_info({session_worker, SWpid, tcp_closed}, State = #state{session_workers 
     %% reset queue
     %% add worker PIDs to the pools in State
     {NewSworkers, NewQworkers, NewActiveSessions} = 
-        case lists:keytake(SWpid, 1, ActiveSessions) of
+        case lists:keytake(SWpid, #session.sworker, ActiveSessions) of
             false ->
                 ?log("session worker ~p (inactive) lost connection", [SWpid]),
                 {Sworkers, Qworkers, ActiveSessions};
-            {value, {SWpid, QWpid, _Socket}, RemainingSessions} ->
+            {value, #session{sworker = SWpid, qworker = QWpid}, RemainingSessions} ->
                 ?log("session worker ~p lost connection", [SWpid]),
                 queue_worker:reset(QWpid),
                 session_worker:reset(SWpid),
@@ -218,7 +288,6 @@ set_up_session(Socket, State = #state{session_workers = Sworkers, queue_workers 
                 %% create a new one
                 true -> 
                     {ok, QW} = queue_sup:start_child(),
-                    erlang:monitor(process, QW),
                     {QW, []};
                 %% can't create more -> throw in the towel
                 false ->
@@ -230,23 +299,23 @@ set_up_session(Socket, State = #state{session_workers = Sworkers, queue_workers 
     SworkerCount = length(Sworkers) + length(ActiveSessions),
     {NewSworker, NewSessionWorkers} = case Sworkers of
         %% grab an idle worker
-        %% TODO: call session worker and set it's state with NewQworker
         [Hs|Ts] -> {Hs, Ts};
         
         %% no idle workers
         [] -> case SworkerCount < ?conf(max_sessions) of
                 true ->
-                    {ok, SW} = session_sup:start_child(NewQworker),
-                    erlang:monitor(process, SW),
+                    {ok, SW} = session_sup:start_child(),
                     {SW, []};
                 false ->
                     throw(no_available_sessions)
             end
     end,
 
-    NewActiveSessions = [{NewSworker, NewQworker, Socket} | ActiveSessions],
+    NewActiveSessions = [#session{sworker = NewSworker, qworker = NewQworker, socket = Socket} | ActiveSessions],
 
-    %% give the socket to the new session worker
+    %% give the socket to the new session worker and set up worker state
     gen_tcp:controlling_process(Socket, NewSworker),
+    session_worker:set_socket(NewSworker, Socket),
+    session_worker:set_queue(NewSworker, NewQworker),
 
     State#state{session_workers = NewSessionWorkers, queue_workers = NewQueueWorkers, active_sessions = NewActiveSessions}.
