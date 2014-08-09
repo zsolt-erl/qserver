@@ -4,7 +4,10 @@
               {registered,[]},
               {applications,[kernel,stdlib]},
               {mod,{qserver_app,[]}},
-              {env,[]},
+              {env,[{bind_ip,{0,0,0,0}},
+                    {bind_port,2244},
+                    {max_sessions,2},
+                    {max_queues,5}]},
               {modules,[fifo,qs,qserver_app,qserver_sup,queue_sup,
                         queue_worker,session_mngr,session_sup,
                         session_worker]}]}.

@@ -23,7 +23,7 @@ You can also run it in the background as an erlang node with ```rel/qsnode/bin/q
 
 Configuration
 -------------
-The config file is at ```priv/qserver.config``` .
+Configuration is set in ``apps/qserver/src/qserver.app.src``` if qserver is run in the shell or in ```rel/qsnode/releases/20140807a/sys.config``` for the release version.
 
 You can change the IP address and port the server binds to (default is 0.0.0.0 : 2244).
 
